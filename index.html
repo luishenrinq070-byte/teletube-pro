@@ -34,13 +34,14 @@
         try {
             // CORREÇÃO 1: O navegador não possui as variáveis nativas de servidor.
             // Precisamos injetar o 'Buffer' globalmente antes de carregar o Telegram.
-            const bufferModule = await import('https://esm.sh/buffer');
+            const bufferModule = await import('https://esm.sh/buffer@6.0.3');
             window.Buffer = bufferModule.Buffer;
             window.global = window; // Previne outro erro comum de módulos Node.js
 
-            // CORREÇÃO 2: Forçamos o importador a usar criptografia real (crypto-browserify)
-            // no lugar do simulador incompleto para conseguir criar as chaves de segurança.
-            const tg = await import('https://esm.sh/telegram@2.22.2?bundle&alias=crypto:crypto-browserify,stream:stream-browserify');
+            // CORREÇÃO 2 & 3: Forçamos o importador a usar criptografia real (crypto-browserify).
+            // Usamos a versão exata do bundle e ignoramos dependências opcionais de HTML (cheerio/domutils) 
+            // que não são usadas pelo Telegram MTProto e causam erros 404 no CDN.
+            const tg = await import('https://esm.sh/telegram@2.22.2?bundle=true&alias=crypto:crypto-browserify,stream:stream-browserify&external=domhandler,domutils');
             
             window.TelegramLib = {
                 Api: tg.Api,
