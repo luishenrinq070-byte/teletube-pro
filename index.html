@@ -184,11 +184,15 @@
                         peer = Number(channelId);
                     }
 
-                    // No MTKruto, iteramos usando for await...of pois getHistory é um iterador assíncrono
                     const formattedVideos = [];
-                    let count = 0;
                     
-                    for await (const m of clientRef.current.getHistory(peer, { limit: 50 })) {
+                    // MTKruto retorna uma Promise com a lista de mensagens pronta, não um iterador.
+                    const messagesObj = await clientRef.current.getHistory(peer, { limit: 50 });
+                    
+                    // Garante a extração correta da lista, dependendo se a API retorna direto o array ou um objeto
+                    const messagesList = Array.isArray(messagesObj) ? messagesObj : (messagesObj?.messages || []);
+                    
+                    for (const m of messagesList) {
                         const hasMedia = m.video || (m.document && m.document.mimeType && m.document.mimeType.includes('video'));
                         
                         if (hasMedia) {
@@ -211,9 +215,6 @@
                                 deepLink: `https://t.me/c/${cleanChannelId}/${m.id}`
                             });
                         }
-                        
-                        count++;
-                        if (count >= 50) break; // Limite de leitura
                     }
                     
                     setVideos(formattedVideos);
