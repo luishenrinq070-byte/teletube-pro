@@ -18,10 +18,20 @@
     <!-- Babel para compilar o JSX direto no navegador -->
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 
-    <!-- Este mapa de importação previne o erro "Failed to resolve module specifier" -->
+    <!-- MAPA DE IMPORTAÇÃO MÁXIMO: Força o navegador a usar os polyfills reais e ignora as falhas do CDN (unenv) -->
     <script type="importmap">
         {
             "imports": {
+                "telegram": "https://esm.sh/telegram@2.22.2?bundle&external=crypto,stream,buffer,events,path,net,tls,fs,os,domhandler,domutils",
+                "crypto": "https://esm.sh/crypto-browserify@3.12.0",
+                "stream": "https://esm.sh/stream-browserify@3.0.0",
+                "buffer": "https://esm.sh/buffer@6.0.3",
+                "events": "https://esm.sh/events@3.3.0",
+                "path": "https://esm.sh/path-browserify@1.0.1",
+                "net": "https://esm.sh/net-browserify@0.2.4",
+                "tls": "https://esm.sh/tls-browserify@0.1.2",
+                "fs": "https://esm.sh/browserify-fs@1.0.0",
+                "os": "https://esm.sh/os-browserify@0.3.0",
                 "domhandler": "https://esm.sh/domhandler@5.0.3",
                 "domutils": "https://esm.sh/domutils@3.1.0"
             }
@@ -33,29 +43,32 @@
     <div id="root"></div>
 
     <script type="module">
-        // 1. Carrega o Buffer (Essencial para a criptografia do Telegram funcionar no Navegador)
-        import { Buffer } from "https://esm.sh/buffer@6.0.3";
-        window.Buffer = Buffer;
-        window.global = window;
-
-        console.log("Iniciando download do motor Telegram...");
+        console.log("Iniciando preparação do ambiente...");
 
         try {
-            // 2. Carrega o pacote GramJS com os polyfills de criptografia para não quebrar o WebSocket
-            const tg = await import("https://esm.sh/telegram@2.22.2?bundle&alias=crypto:crypto-browserify,stream:stream-browserify&external=domhandler,domutils");
+            // 1. Injeta o Buffer Globalmente PRIMEIRO (Crítico para a Criptografia funcionar sem quebrar)
+            const bufferModule = await import("buffer");
+            window.Buffer = bufferModule.Buffer;
+            window.global = window;
             
-            // 3. Salva as classes principais na janela global para o React poder usar
+            console.log("Baixando motor do Telegram (Aguarde alguns segundos)...");
+
+            // 2. Somente após o Buffer existir, importamos o Telegram (usando a regra do importmap)
+            const tg = await import("telegram");
+            
+            // 3. Salva no escopo global para o React poder acessar
             window.TelegramClient = tg.TelegramClient;
             window.Api = tg.Api;
             window.StringSession = tg.sessions.StringSession;
             
             console.log("Motor Telegram carregado com sucesso!");
             
-            // 4. Avisa o React que o motor está pronto
+            // 4. Avisa o React que o motor está pronto para uso
             window.dispatchEvent(new Event('gramjs-ready'));
+            
         } catch (error) {
-            console.error("Erro fatal ao importar pacote:", error);
-            alert("Erro ao carregar o motor do Telegram. Verifique a aba Console (F12).");
+            console.error("Erro fatal ao iniciar Telegram:", error);
+            alert("Falha ao carregar o motor. Verifique a aba Console (F12).");
         }
     </script>
 
@@ -68,6 +81,7 @@
             const [apiId, setApiId] = useState(localStorage.getItem('tg_api_id') || '');
             const [apiHash, setApiHash] = useState(localStorage.getItem('tg_api_hash') || '');
             const [channelId, setChannelId] = useState(localStorage.getItem('tg_channel_id') || '');
+            
             const [phoneNumber, setPhoneNumber] = useState('');
             const [phoneCode, setPhoneCode] = useState('');
             const [phoneCodeHash, setPhoneCodeHash] = useState('');
@@ -82,7 +96,7 @@
             const [videoTitle, setVideoTitle] = useState('');
             const fileInputRef = useRef(null);
             
-            // Instância global do cliente
+            // Instância global do cliente Telegram
             const clientRef = useRef(null);
 
             // Aguarda o script de módulo carregar o GramJS
@@ -293,6 +307,7 @@
                                 </div>
                             )}
 
+                            {}
                             {status === 'auth_phone' && (
                                 <div className="space-y-4">
                                     <p className="text-gray-300 text-sm text-center">Precisamos conectar à sua conta do Telegram para permitir o upload de arquivos grandes.</p>
@@ -341,6 +356,7 @@
                     {/* Conteúdo das Abas */}
                     <main className="flex-1 p-4 w-full max-w-2xl mx-auto">
                         
+                        {}
                         {/* Aba Acervo */}
                         {activeTab === 'acervo' && (
                             <div className="space-y-4">
@@ -385,6 +401,7 @@
                             </div>
                         )}
 
+                        {}
                         {/* Aba Enviar */}
                         {activeTab === 'enviar' && (
                             <div className="bg-gray-800 p-6 rounded-xl shadow-lg border border-gray-700">
@@ -414,6 +431,7 @@
                                         />
                                     </div>
 
+                                    {}
                                     {uploading && (
                                         <div className="bg-gray-900 p-4 rounded-lg border border-gray-700">
                                             <div className="flex justify-between text-sm mb-2">
@@ -437,6 +455,7 @@
                         )}
                     </main>
 
+                    {}
                     {/* Bottom Navigation */}
                     <nav className="fixed bottom-0 w-full bg-gray-800 border-t border-gray-700 flex">
                         <button 
