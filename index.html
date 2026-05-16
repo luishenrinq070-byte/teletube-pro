@@ -1,0 +1,485 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="theme-color" content="#0f172a">
+    <title>TeleTube Pro - 2GB Uploads</title>
+    
+    <!-- Bibliotecas essenciais -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
+    <!-- GramJS (Motor MTProto para Telegram) -->
+    <script src="https://cdn.jsdelivr.net/npm/telegram@2.22.2/browser/bundle.js"></script>
+
+    <style>
+        body { font-family: 'Inter', sans-serif; background-color: #0f172a; color: #f8fafc; overflow: hidden; }
+        .mobile-container { max-width: 480px; margin: 0 auto; height: 100vh; display: flex; flex-direction: column; background-color: #1e293b; position: relative; box-shadow: 0 0 20px rgba(0,0,0,0.5); }
+        .hide-scrollbar::-webkit-scrollbar { display: none; }
+        .hide-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+        /* Animação para toasts (notificações) */
+        @keyframes slideIn { from { transform: translateY(-100%); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+        .toast-animate { animation: slideIn 0.3s ease-out forwards; }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
+        const { Api, TelegramClient } = telegram;
+        const { StringSession } = telegram.sessions;
+
+        function App() {
+            // Estados de Navegação e Autenticação
+            const [activeTab, setActiveTab] = useState('gallery');
+            const [sessionString, setSessionString] = useState(localStorage.getItem('tg_session') || '');
+            const [clientReady, setClientReady] = useState(false);
+            
+            // Credenciais salvas para agilizar
+            const [apiId, setApiId] = useState(localStorage.getItem('tg_api_id') || '');
+            const [apiHash, setApiHash] = useState(localStorage.getItem('tg_api_hash') || '');
+            const [channelId, setChannelId] = useState(localStorage.getItem('tg_channel_id') || '');
+            
+            // Referência global para o cliente do Telegram
+            const clientRef = useRef(null);
+
+            // Sistema de Notificações Customizado (Substitui o alert)
+            const [toast, setToast] = useState({ show: false, message: '', type: 'info' });
+            
+            const showMessage = (message, type = 'info') => {
+                setToast({ show: true, message, type });
+                setTimeout(() => setToast({ show: false, message: '', type: 'info' }), 4000);
+            };
+
+            useEffect(() => {
+                // Tenta conectar automaticamente se já tiver uma sessão salva
+                if (sessionString && apiId && apiHash && !clientReady) {
+                    initClient(sessionString);
+                }
+            }, []);
+
+            const initClient = async (savedSession = '') => {
+                try {
+                    const stringSession = new StringSession(savedSession);
+                    clientRef.current = new TelegramClient(stringSession, Number(apiId), apiHash, {
+                        connectionRetries: 5,
+                    });
+                    
+                    await clientRef.current.connect();
+                    
+                    if (savedSession) {
+                        setClientReady(true);
+                        showMessage("Conectado com sucesso!", "success");
+                    }
+                    return clientRef.current;
+                } catch (error) {
+                    console.error("Erro ao iniciar cliente:", error);
+                    showMessage("Sessão expirada ou erro de conexão.", "error");
+                    handleLogout();
+                }
+            };
+
+            const handleLogout = () => {
+                localStorage.clear();
+                setSessionString('');
+                setApiId('');
+                setApiHash('');
+                setChannelId('');
+                setClientReady(false);
+                if (clientRef.current) clientRef.current.disconnect();
+            };
+
+            const LoginScreen = () => {
+                const [step, setStep] = useState(1); // 1: Credenciais, 2: Telefone, 3: Código, 4: Senha 2FA
+                const [phone, setPhone] = useState('');
+                const [code, setCode] = useState('');
+                const [password, setPassword] = useState('');
+                const [phoneCodeHash, setPhoneCodeHash] = useState('');
+                const [loading, setLoading] = useState(false);
+
+                const handleSaveCredentials = () => {
+                    if (!apiId || !apiHash || !channelId) return showMessage('Preencha API ID, Hash e ID do Canal.', 'error');
+                    localStorage.setItem('tg_api_id', apiId);
+                    localStorage.setItem('tg_api_hash', apiHash);
+                    localStorage.setItem('tg_channel_id', channelId);
+                    setStep(2);
+                };
+
+                const handleSendPhone = async () => {
+                    if (!phone) return showMessage('Digite o telefone', 'error');
+                    setLoading(true);
+                    try {
+                        const client = await initClient('');
+                        const result = await client.sendCode(
+                            { apiId: Number(apiId), apiHash },
+                            phone
+                        );
+                        setPhoneCodeHash(result.phoneCodeHash);
+                        showMessage('Código enviado no seu Telegram!', 'success');
+                        setStep(3);
+                    } catch (err) {
+                        showMessage(err.message || 'Erro ao enviar código', 'error');
+                    }
+                    setLoading(false);
+                };
+
+                const handleVerifyCode = async () => {
+                    if (!code) return showMessage('Digite o código', 'error');
+                    setLoading(true);
+                    try {
+                        await clientRef.current.signInUser(
+                            { apiId: Number(apiId), apiHash },
+                            { phoneNumber: phone, phoneCode: code, phoneCodeHash }
+                        );
+                        finishLogin();
+                    } catch (err) {
+                        if (err.message.includes('SESSION_PASSWORD_NEEDED')) {
+                            setStep(4);
+                            showMessage('Conta protegida por verificação em 2 etapas.', 'info');
+                        } else {
+                            showMessage(err.message || 'Código inválido', 'error');
+                        }
+                    }
+                    setLoading(false);
+                };
+
+                const handleVerifyPassword = async () => {
+                    if (!password) return showMessage('Digite a senha', 'error');
+                    setLoading(true);
+                    try {
+                        await clientRef.current.signInWithPassword(
+                            { apiId: Number(apiId), apiHash },
+                            { password, onError: (e) => { throw e; } }
+                        );
+                        finishLogin();
+                    } catch (err) {
+                        showMessage('Senha incorreta', 'error');
+                    }
+                    setLoading(false);
+                };
+
+                const finishLogin = () => {
+                    const session = clientRef.current.session.save();
+                    localStorage.setItem('tg_session', session);
+                    setSessionString(session);
+                    setClientReady(true);
+                    showMessage('Login concluído!', 'success');
+                };
+
+                return (
+                    <div className="flex-1 overflow-y-auto p-6 hide-scrollbar flex flex-col items-center justify-center text-center">
+                        <i className="fab fa-telegram-plane text-blue-500 text-6xl mb-4"></i>
+                        <h1 className="text-2xl font-bold mb-2">TeleTube Pro</h1>
+                        
+                        {step === 1 && (
+                            <div className="w-full animate-fade-in">
+                                <p className="text-slate-400 text-sm mb-6">Insira os dados do my.telegram.org e o ID do seu canal (-100...)</p>
+                                <input type="number" placeholder="App API ID" className="w-full bg-slate-800 border border-slate-700 rounded-lg p-4 mb-3 text-white" value={apiId} onChange={e => setApiId(e.target.value)} />
+                                <input type="text" placeholder="App API Hash" className="w-full bg-slate-800 border border-slate-700 rounded-lg p-4 mb-3 text-white" value={apiHash} onChange={e => setApiHash(e.target.value)} />
+                                <input type="text" placeholder="ID do Canal (ex: -100123...)" className="w-full bg-slate-800 border border-slate-700 rounded-lg p-4 mb-6 text-white" value={channelId} onChange={e => setChannelId(e.target.value)} />
+                                <button onClick={handleSaveCredentials} className="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-4 rounded-lg shadow-lg">Avançar</button>
+                            </div>
+                        )}
+
+                        {step === 2 && (
+                            <div className="w-full animate-fade-in">
+                                <p className="text-slate-400 text-sm mb-6">Qual número de celular será usado para upload?</p>
+                                <input type="text" placeholder="+55 11 99999-9999" className="w-full bg-slate-800 border border-slate-700 rounded-lg p-4 mb-6 text-white text-center text-lg tracking-wider" value={phone} onChange={e => setPhone(e.target.value)} />
+                                <button onClick={handleSendPhone} disabled={loading} className="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-4 rounded-lg shadow-lg disabled:opacity-50">
+                                    {loading ? 'Solicitando...' : 'Enviar Código'}
+                                </button>
+                                <button onClick={() => setStep(1)} className="mt-4 text-slate-500 text-sm">Voltar</button>
+                            </div>
+                        )}
+
+                        {step === 3 && (
+                            <div className="w-full animate-fade-in">
+                                <p className="text-slate-400 text-sm mb-6">Verifique o aplicativo oficial do Telegram. Um código foi enviado.</p>
+                                <input type="number" placeholder="Código de 5 dígitos" className="w-full bg-slate-800 border border-slate-700 rounded-lg p-4 mb-6 text-white text-center text-2xl tracking-[0.5em]" value={code} onChange={e => setCode(e.target.value)} />
+                                <button onClick={handleVerifyCode} disabled={loading} className="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-4 rounded-lg shadow-lg disabled:opacity-50">
+                                    {loading ? 'Verificando...' : 'Confirmar Código'}
+                                </button>
+                            </div>
+                        )}
+
+                        {step === 4 && (
+                            <div className="w-full animate-fade-in">
+                                <p className="text-slate-400 text-sm mb-6">Sua conta possui Verificação em Duas Etapas. Digite sua senha.</p>
+                                <input type="password" placeholder="Senha do Telegram" className="w-full bg-slate-800 border border-slate-700 rounded-lg p-4 mb-6 text-white text-center" value={password} onChange={e => setPassword(e.target.value)} />
+                                <button onClick={handleVerifyPassword} disabled={loading} className="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-4 rounded-lg shadow-lg disabled:opacity-50">
+                                    {loading ? 'Acessando...' : 'Entrar'}
+                                </button>
+                            </div>
+                        )}
+                    </div>
+                );
+            };
+
+            const UploadScreen = () => {
+                const [file, setFile] = useState(null);
+                const [caption, setCaption] = useState('');
+                const [uploading, setUploading] = useState(false);
+                const [progress, setProgress] = useState(0);
+
+                const handleFileChange = (e) => {
+                    const selected = e.target.files[0];
+                    if (selected && selected.size > 2 * 1024 * 1024 * 1024) {
+                        showMessage("Arquivo muito grande. O limite padrão é 2GB.", "error");
+                        return;
+                    }
+                    setFile(selected);
+                };
+
+                const startUpload = async () => {
+                    if (!file || !clientRef.current) return;
+                    setUploading(true);
+                    setProgress(0);
+
+                    try {
+                        // Converte a string do ID para BigInt exigido pelo GramJS para canais
+                        const peer = await clientRef.current.getInputEntity(channelId);
+
+                        // O sendFile já faz o chunking automático para arquivos grandes via buffer interno
+                        await clientRef.current.sendFile(peer, {
+                            file: file,
+                            caption: caption,
+                            workers: 4, // Multi-thread simulada para navegador
+                            progressCallback: (prog) => {
+                                // O progress vem em float (0.00 a 1.00)
+                                const percent = Math.round(prog * 100);
+                                setProgress(percent);
+                            }
+                        });
+
+                        showMessage('Vídeo enviado com sucesso!', 'success');
+                        setFile(null);
+                        setCaption('');
+                        setActiveTab('gallery'); // Redireciona para a galeria
+                    } catch (error) {
+                        console.error(error);
+                        showMessage('Erro ao enviar vídeo. O canal é válido?', 'error');
+                    } finally {
+                        setUploading(false);
+                    }
+                };
+
+                return (
+                    <div className="flex-1 overflow-y-auto p-4 hide-scrollbar flex flex-col">
+                        <div className="flex justify-between items-center mb-6 mt-4">
+                            <h2 className="text-xl font-bold">Enviar Vídeo (2GB)</h2>
+                            <button onClick={handleLogout} className="text-slate-500 text-sm hover:text-red-400">Sair</button>
+                        </div>
+                        
+                        <label className={`border-2 border-dashed ${file ? 'border-blue-500 bg-blue-900/20' : 'border-slate-600 bg-slate-800/50'} rounded-xl flex flex-col items-center justify-center p-8 cursor-pointer hover:border-blue-400 transition-colors mb-6`}>
+                            <i className={`fas ${file ? 'fa-check-circle text-blue-400' : 'fa-film text-slate-400'} text-5xl mb-4`}></i>
+                            <span className="text-slate-200 font-medium text-center line-clamp-2">
+                                {file ? file.name : "Toque para escolher o vídeo"}
+                            </span>
+                            <span className="text-slate-500 text-sm mt-2">
+                                {file ? `${(file.size / (1024*1024)).toFixed(1)} MB` : 'Até 2.000 MB'}
+                            </span>
+                            <input type="file" accept="video/*" className="hidden" onChange={handleFileChange} disabled={uploading}/>
+                        </label>
+
+                        <div className="mb-6">
+                            <label className="text-sm text-slate-400 mb-2 block">Legenda, Título e Tags</label>
+                            <textarea 
+                                rows="4"
+                                className="w-full bg-slate-800 border border-slate-700 rounded-lg p-4 text-white focus:outline-none focus:border-blue-500"
+                                placeholder="Digite um título incrível... #aula #curso"
+                                value={caption}
+                                onChange={e => setCaption(e.target.value)}
+                                disabled={uploading}
+                            ></textarea>
+                        </div>
+
+                        {uploading ? (
+                            <div className="mt-auto mb-4 bg-slate-800 p-4 rounded-xl border border-slate-700">
+                                <div className="flex justify-between text-sm mb-3">
+                                    <span className="text-slate-300">Enviando pedaços (Chunks)...</span>
+                                    <span className="font-bold text-blue-400">{progress}%</span>
+                                </div>
+                                <div className="w-full bg-slate-900 rounded-full h-4 overflow-hidden">
+                                    <div className="bg-gradient-to-r from-blue-600 to-cyan-400 h-4 rounded-full transition-all duration-300 relative" style={{width: `${progress}%`}}>
+                                        <div className="absolute inset-0 bg-white/20 animate-pulse"></div>
+                                    </div>
+                                </div>
+                                <p className="text-xs text-slate-500 text-center mt-3">Mantenha o aplicativo aberto</p>
+                            </div>
+                        ) : (
+                            <button 
+                                onClick={startUpload}
+                                disabled={!file}
+                                className={`mt-auto mb-4 w-full py-4 rounded-xl font-bold text-lg shadow-lg transition-all ${file ? 'bg-blue-600 hover:bg-blue-500 text-white shadow-blue-500/30' : 'bg-slate-800 text-slate-600 cursor-not-allowed'}`}
+                            >
+                                Iniciar Upload
+                            </button>
+                        )}
+                    </div>
+                );
+            };
+
+            const GalleryScreen = () => {
+                const [videos, setVideos] = useState([]);
+                const [loadingVideos, setLoadingVideos] = useState(true);
+                const [searchTerm, setSearchTerm] = useState('');
+
+                useEffect(() => {
+                    fetchVideos();
+                }, []);
+
+                const fetchVideos = async () => {
+                    setLoadingVideos(true);
+                    try {
+                        const peer = await clientRef.current.getInputEntity(channelId);
+                        // Busca as últimas 50 mensagens do canal que contenham mídia do tipo Vídeo
+                        const messages = await clientRef.current.getMessages(peer, {
+                            limit: 50,
+                            filter: new Api.InputMessagesFilterVideo()
+                        });
+
+                        const parsedVideos = messages.map(msg => ({
+                            id: msg.id,
+                            caption: msg.message || 'Sem título',
+                            date: new Date(msg.date * 1000).toLocaleDateString('pt-BR'),
+                            size: msg.media?.document?.size ? (msg.media.document.size / (1024*1024)).toFixed(1) + ' MB' : 'Desc.'
+                        }));
+                        setVideos(parsedVideos);
+                    } catch (error) {
+                        console.error(error);
+                        showMessage("Erro ao carregar histórico. Verifique o ID do Canal.", "error");
+                    } finally {
+                        setLoadingVideos(false);
+                    }
+                };
+
+                // Trata o ID do canal para gerar o link direto (Deeplink).
+                // O Telegram usa IDs formatados sem o prefixo "-100" para deeplinks internos
+                const generateDeepLink = (msgId) => {
+                    let cleanChannelId = channelId.toString();
+                    if (cleanChannelId.startsWith('-100')) {
+                        cleanChannelId = cleanChannelId.substring(4);
+                    }
+                    // URL que abre o vídeo nativamente no Telegram do usuário
+                    return `https://t.me/c/${cleanChannelId}/${msgId}`;
+                };
+
+                const filteredVideos = videos.filter(v => v.caption.toLowerCase().includes(searchTerm.toLowerCase()));
+
+                return (
+                    <div className="flex-1 flex flex-col relative bg-slate-900">
+                        <div className="p-4 bg-slate-900 border-b border-slate-800 z-10">
+                            <div className="flex justify-between items-center mb-3">
+                                <h2 className="text-lg font-bold text-slate-200">Meus Vídeos</h2>
+                                <button onClick={fetchVideos} className="text-blue-400 hover:text-blue-300 w-8 h-8 rounded-full bg-blue-500/10 flex items-center justify-center">
+                                    <i className={`fas fa-sync-alt ${loadingVideos ? 'fa-spin' : ''}`}></i>
+                                </button>
+                            </div>
+                            <div className="relative">
+                                <i className="fas fa-search absolute left-4 top-3.5 text-slate-500"></i>
+                                <input 
+                                    type="text" 
+                                    placeholder="Buscar por legenda ou tag..." 
+                                    className="w-full bg-slate-800 border border-slate-700 rounded-xl py-3 pl-11 pr-4 text-sm text-white focus:outline-none focus:border-blue-500"
+                                    value={searchTerm}
+                                    onChange={e => setSearchTerm(e.target.value)}
+                                />
+                            </div>
+                        </div>
+
+                        <div className="flex-1 overflow-y-auto p-4 hide-scrollbar space-y-4">
+                            {loadingVideos ? (
+                                <div className="text-center text-slate-500 mt-10 flex flex-col items-center">
+                                    <i className="fas fa-circle-notch fa-spin text-3xl mb-3 text-blue-500"></i>
+                                    <p>Sincronizando com o Telegram...</p>
+                                </div>
+                            ) : filteredVideos.length === 0 ? (
+                                <div className="text-center text-slate-500 mt-10">
+                                    <i className="fas fa-inbox text-4xl mb-3 opacity-20"></i>
+                                    <p>Nenhum vídeo encontrado.</p>
+                                </div>
+                            ) : (
+                                filteredVideos.map((video) => (
+                                    <div key={video.id} className="bg-slate-800 border border-slate-700 rounded-xl p-4 flex flex-col gap-3 shadow-lg">
+                                        <div className="flex gap-4">
+                                            <div className="w-24 h-20 bg-slate-900 rounded-lg flex flex-col items-center justify-center flex-shrink-0 relative">
+                                                <i className="fas fa-video text-slate-600 text-2xl mb-1"></i>
+                                                <span className="text-[10px] text-slate-500 font-mono bg-slate-800 px-2 py-0.5 rounded-full">{video.size}</span>
+                                            </div>
+                                            <div className="flex-1 min-w-0 flex flex-col justify-center">
+                                                <p className="text-sm font-medium text-white line-clamp-2 leading-snug">{video.caption}</p>
+                                                <p className="text-xs text-slate-400 mt-2"><i className="far fa-clock mr-1"></i>{video.date}</p>
+                                            </div>
+                                        </div>
+                                        {/* Botão de Deeplink que joga o streaming pesado pro App Nativo */}
+                                        <a 
+                                            href={generateDeepLink(video.id)} 
+                                            target="_blank" 
+                                            rel="noreferrer"
+                                            className="w-full bg-blue-600/10 hover:bg-blue-600/20 text-blue-400 border border-blue-500/20 rounded-lg py-2.5 text-center text-sm font-semibold transition-colors flex items-center justify-center"
+                                        >
+                                            <i className="fas fa-external-link-alt mr-2"></i> Assistir no Telegram Nativo
+                                        </a>
+                                    </div>
+                                ))
+                            )}
+                        </div>
+                    </div>
+                );
+            };
+
+            return (
+                <div className="mobile-container">
+                    
+                    {/* Sistema Global de Notificações (Toasts) */}
+                    {toast.show && (
+                        <div className="absolute top-4 left-4 right-4 z-50 flex justify-center toast-animate">
+                            <div className={`px-4 py-3 rounded-xl shadow-2xl flex items-center gap-3 w-full max-w-sm border ${toast.type === 'error' ? 'bg-red-900/90 border-red-500/50 text-red-100' : toast.type === 'success' ? 'bg-emerald-900/90 border-emerald-500/50 text-emerald-100' : 'bg-slate-800 border-slate-600 text-white'}`}>
+                                <i className={`fas ${toast.type === 'error' ? 'fa-exclamation-triangle' : toast.type === 'success' ? 'fa-check-circle' : 'fa-info-circle'} text-lg`}></i>
+                                <span className="text-sm font-medium">{toast.message}</span>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Roteamento Interno */}
+                    {!clientReady ? (
+                        <LoginScreen />
+                    ) : (
+                        <React.Fragment>
+                            {/* Conteúdo da Aba Ativa */}
+                            {activeTab === 'gallery' ? <GalleryScreen /> : <UploadScreen />}
+
+                            {/* Barra de Navegação Inferior Fixa */}
+                            <div className="bg-slate-900 border-t border-slate-800 flex justify-around p-1 pb-safe z-20">
+                                <button 
+                                    onClick={() => setActiveTab('gallery')}
+                                    className={`flex-1 flex flex-col items-center py-3 transition-colors ${activeTab === 'gallery' ? 'text-blue-500' : 'text-slate-500 hover:text-slate-300'}`}
+                                >
+                                    <i className="fas fa-film text-xl mb-1"></i>
+                                    <span className="text-[10px] font-bold uppercase tracking-wider">Acervo</span>
+                                </button>
+                                
+                                <button 
+                                    onClick={() => setActiveTab('upload')}
+                                    className={`flex-1 flex flex-col items-center py-3 transition-colors ${activeTab === 'upload' ? 'text-blue-500' : 'text-slate-500 hover:text-slate-300'}`}
+                                >
+                                    <i className="fas fa-cloud-upload-alt text-xl mb-1"></i>
+                                    <span className="text-[10px] font-bold uppercase tracking-wider">Enviar</span>
+                                </button>
+                            </div>
+                        </React.Fragment>
+                    )}
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
