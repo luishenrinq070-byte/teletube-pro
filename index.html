@@ -15,7 +15,7 @@
     <script type="importmap">
         {
             "imports": {
-                "mtkruto": "https://esm.sh/@mtkruto/browser"
+                "mtkruto": "https://esm.sh/mtkruto@0.142.0"
             }
         }
     </script>
@@ -27,7 +27,6 @@
         console.log("Inicializando motor MTKruto (Web-First)...");
 
         try {
-            // Agora usando esm.sh, que resolve as dependências automaticamente!
             const { Client, StorageLocalStorage } = await import("mtkruto");
             
             window.TelegramClient = Client;
@@ -66,32 +65,28 @@
         }
 
         function App() {
-            // Estados do Sistema
             const [isEngineReady, setIsEngineReady] = useState(false);
             const [status, setStatus] = useState('initial'); 
             const [activeTab, setActiveTab] = useState('acervo');
             
-            // Credenciais do Usuário
             const [apiId, setApiId] = useState(localStorage.getItem('tg_api_id') || '');
             const [apiHash, setApiHash] = useState(localStorage.getItem('tg_api_hash') || '');
             const [channelId, setChannelId] = useState(localStorage.getItem('tg_channel_id') || '');
             
-            // Dados Temporários do Login
             const [phoneNumber, setPhoneNumber] = useState('');
             const [phoneCode, setPhoneCode] = useState('');
             const [password, setPassword] = useState('');
 
-            // Refs de Promessa (Para não travar a UI durante o login)
             const phonePromiseRef = useRef(null);
             const codePromiseRef = useRef(null);
             const passwordPromiseRef = useRef(null);
             
-            // Dados da Galeria e Upload
             const [videos, setVideos] = useState([]);
             const [loadingVideos, setLoadingVideos] = useState(false);
             const [uploadProgress, setUploadProgress] = useState(0);
             const [uploading, setUploading] = useState(false);
             const [videoTitle, setVideoTitle] = useState('');
+            const [uploadPhase, setUploadPhase] = useState(''); // Indica se está convertendo para binário
             
             const [modalConfig, setModalConfig] = useState({ isOpen: false, title: '', message: '' });
             
@@ -99,7 +94,6 @@
             const clientRef = useRef(null);
 
             useEffect(() => {
-                // Se já carregou rápido, ativa. Se não, espera o evento.
                 if (window.TelegramClient && window.StorageLocalStorage) {
                     setIsEngineReady(true);
                 } else {
@@ -118,7 +112,6 @@
                     return showMessage("Campos Vazios", "Por favor, preencha a API ID, API HASH e o ID do seu Canal.");
                 }
                 
-                // Salva configurações base
                 localStorage.setItem('tg_api_id', apiId);
                 localStorage.setItem('tg_api_hash', apiHash);
                 localStorage.setItem('tg_channel_id', channelId);
@@ -126,7 +119,6 @@
                 setStatus('connecting');
 
                 try {
-                    // Instancia Cliente. O MTKruto salva tudo automaticamente no LocalStorage!
                     const client = new window.TelegramClient({
                         storage: new window.StorageLocalStorage(`tg_session_${apiId}`),
                         apiId: parseInt(apiId),
@@ -135,7 +127,6 @@
                     
                     clientRef.current = client;
 
-                    // Fluxo Automático de Login
                     await client.start({
                         phone: async () => {
                             setStatus('auth_phone');
@@ -193,21 +184,24 @@
                         peer = Number(channelId);
                     }
 
-                    // Puxando mensagens nativamente (Aguardando a Promise terminar de carregar)
-                    const history = await clientRef.current.getHistory(peer, { limit: 50 });
+                    // No MTKruto, iteramos usando for await...of pois getHistory é um iterador assíncrono
                     const formattedVideos = [];
+                    let count = 0;
                     
-                    // MTKruto retorna o Array pronto, iteramos ele de forma síncrona
-                    for (const m of history) {
-                        // Verifica rigorosamente se há um vídeo
+                    for await (const m of clientRef.current.getHistory(peer, { limit: 50 })) {
                         const hasMedia = m.video || (m.document && m.document.mimeType && m.document.mimeType.includes('video'));
                         
                         if (hasMedia) {
                             const title = m.caption || m.video?.fileName || m.document?.fileName || "Vídeo do Acervo";
                             const sizeBytes = m.video?.fileSize || m.document?.fileSize || 0;
                             
-                            // Link mágico para streaming direto no app oficial do Telegram
-                            const cleanChannelId = channelId.toString().replace('-100', '');
+                            // Limpa o -100 para gerar o link curto que abre o vídeo direto no App do Telegram
+                            let cleanChannelId = channelId.toString();
+                            if (cleanChannelId.startsWith('-100')) {
+                                cleanChannelId = cleanChannelId.replace('-100', '');
+                            } else if (cleanChannelId.startsWith('-')) {
+                                cleanChannelId = cleanChannelId.replace('-', '');
+                            }
                             
                             formattedVideos.push({
                                 id: m.id,
@@ -217,15 +211,18 @@
                                 deepLink: `https://t.me/c/${cleanChannelId}/${m.id}`
                             });
                         }
+                        
+                        count++;
+                        if (count >= 50) break; // Limite de leitura
                     }
                     
                     setVideos(formattedVideos);
                 } catch (e) {
                     console.error("Erro na leitura do Canal:", e);
                     if (e.message && e.message.includes('CHAT_ID_INVALID')) {
-                        showMessage("Canal Inválido ou Inacessível", "O Telegram recusou este ID de Canal. Verifique se ele começa com '-100' (ex: -10012345678) ou use o @nome_do_canal. Além disso, a conta logada precisa fazer parte do canal!");
+                        showMessage("ID de Canal Inválido", "O Telegram recusou. Certifique-se de usar o ID com o '-100' na frente (ex: -1003991395114) e que você esteja no canal.");
                     } else {
-                        showMessage("Erro de Leitura", "Falha ao buscar vídeos. Verifique a conexão. Detalhe: " + e.message);
+                        showMessage("Erro de Leitura", "Falha ao buscar vídeos: " + e.message);
                     }
                 } finally {
                     setLoadingVideos(false);
@@ -239,13 +236,8 @@
 
                 setUploading(true);
                 setUploadProgress(0);
-
-                // Simulador Assintótico de Progresso Visual (Para conforto do usuário durante upload)
-                let currentProgress = 0;
-                const progressInterval = setInterval(() => {
-                    currentProgress += (95 - currentProgress) * 0.05;
-                    setUploadProgress(Math.round(currentProgress));
-                }, 500);
+                
+                let progressInterval;
 
                 try {
                     let peer = channelId;
@@ -254,19 +246,33 @@
                     }
 
                     const messageText = videoTitle || file.name;
+
+                    // 1. Transformar o HTML5 File num Uint8Array nativo (Resolve o erro "Unreachable")
+                    setUploadPhase('Convertendo arquivo para Binário... Pode levar alguns segundos.');
+                    const arrayBuffer = await file.arrayBuffer();
+                    const uint8ArrayData = new Uint8Array(arrayBuffer);
                     
-                    // MTKruto processa NATIVAMENTE arquivos do navegador (File object)
-                    await clientRef.current.sendDocument(peer, file, {
-                        caption: messageText
+                    // 2. Iniciar Simulação da Barra de Envio Visual
+                    setUploadPhase('Empacotando e Enviando para o Telegram...');
+                    let currentProgress = 0;
+                    progressInterval = setInterval(() => {
+                        currentProgress += (95 - currentProgress) * 0.05;
+                        setUploadProgress(Math.round(currentProgress));
+                    }, 500);
+
+                    // 3. Enviar Bytes Puros (Informando o nome do arquivo separadamente nos parâmetros)
+                    await clientRef.current.sendDocument(peer, uint8ArrayData, {
+                        caption: messageText,
+                        fileName: file.name
                     });
 
-                    // Completa a barra para 100%
+                    // Sucesso!
                     clearInterval(progressInterval);
                     setUploadProgress(100);
+                    setUploadPhase('');
 
-                    // Pequeno delay para a animação do 100% antes de resetar
                     setTimeout(() => {
-                        showMessage("Upload Concluído! 🎉", "O vídeo foi enviado e criptografado com sucesso para o seu canal do Telegram.");
+                        showMessage("Upload Concluído! 🎉", "O vídeo foi enviado com sucesso para o seu canal do Telegram.");
                         setVideoTitle('');
                         if(fileInputRef.current) fileInputRef.current.value = '';
                         setActiveTab('acervo');
@@ -276,11 +282,13 @@
 
                 } catch (e) {
                     console.error("Erro drástico no upload:", e);
-                    clearInterval(progressInterval);
+                    if (progressInterval) clearInterval(progressInterval);
                     setUploading(false);
                     setUploadProgress(0);
+                    setUploadPhase('');
+                    
                     if (e.message && e.message.includes('CHAT_ID_INVALID')) {
-                        showMessage("ID de Canal Inválido", "O Telegram não encontrou o canal para envio. Verifique se o ID possui o '-100' na frente.");
+                        showMessage("ID de Canal Inválido", "O Telegram não encontrou o canal para envio. Verifique o '-100'.");
                     } else {
                         showMessage("Falha no Upload", "Houve uma quebra ao enviar o arquivo: " + e.message);
                     }
@@ -300,12 +308,12 @@
                                 </div>
                             </div>
                             <h1 className="text-3xl font-extrabold mb-1 text-center text-white tracking-tight">TeleTube Pro</h1>
-                            <p className="text-blue-400 text-center mb-8 text-sm font-medium">Uploads Ilimitados até 2GB</p>
+                            <p className="text-blue-400 text-center mb-8 text-sm font-medium">Motor MTKruto Web</p>
                             
                             {!isEngineReady && (
                                 <div className="bg-blue-900/30 text-blue-300 p-4 rounded-xl mb-6 text-center text-sm border border-blue-800/50 flex flex-col items-center justify-center gap-3">
                                     <div className="w-6 h-6 border-2 border-blue-400 border-t-transparent rounded-full animate-spin"></div>
-                                    <span>Puxando Motor MTKruto Web...<br/><span className="opacity-70 text-xs">Pode levar até 5 segundos.</span></span>
+                                    <span>Puxando Motor MTKruto...<br/><span className="opacity-70 text-xs">Pode levar até 5 segundos.</span></span>
                                 </div>
                             )}
 
@@ -336,21 +344,18 @@
                                 <div className="flex flex-col items-center py-12 animate-fade-in">
                                     <div className="w-14 h-14 border-4 border-blue-500 border-b-transparent rounded-full animate-spin mb-6 shadow-[0_0_20px_rgba(59,130,246,0.5)]"></div>
                                     <p className="text-white font-bold text-lg">Estabelecendo WebSocket...</p>
-                                    <p className="text-gray-400 text-sm mt-2 text-center">Trocando chaves criptográficas com o Telegram.</p>
+                                    <p className="text-gray-400 text-sm mt-2 text-center">Trocando chaves com o Telegram.</p>
                                 </div>
                             )}
 
                             {status === 'auth_phone' && (
                                 <div className="space-y-5 animate-fade-in">
-                                    <div className="bg-gray-700/40 p-4 rounded-xl border border-gray-600/50 mb-2">
-                                        <p className="text-gray-300 text-sm text-center">Para fazer uploads pesados, insira seu telefone do Telegram.</p>
-                                    </div>
                                     <div>
                                         <label className="block text-xs font-bold uppercase tracking-wider text-gray-400 mb-2">Seu Número (com +55 e DDD)</label>
                                         <input type="tel" value={phoneNumber} onChange={e => setPhoneNumber(e.target.value)} className="w-full p-4 bg-gray-900 border border-gray-700 rounded-xl text-white focus:ring-2 focus:ring-blue-500 outline-none text-lg tracking-wide" placeholder="+5511999999999" />
                                     </div>
                                     <button onClick={submitPhone} className="w-full bg-blue-600 hover:bg-blue-500 text-white p-4 rounded-xl font-bold transition-all shadow-lg shadow-blue-900/40">
-                                        Solicitar Código SMS
+                                        Solicitar Código
                                     </button>
                                 </div>
                             )}
@@ -358,21 +363,21 @@
                             {status === 'auth_code' && (
                                 <div className="space-y-5 animate-fade-in">
                                     <div className="bg-green-500/10 p-4 rounded-xl border border-green-500/30 mb-2">
-                                        <p className="text-green-400 text-sm text-center font-medium">Código enviado! Verifique o app oficial do Telegram no seu dispositivo.</p>
+                                        <p className="text-green-400 text-sm text-center font-medium">Verifique o app oficial do Telegram.</p>
                                     </div>
                                     <div>
                                         <label className="block text-xs font-bold uppercase tracking-wider text-gray-400 mb-2">Código de Acesso</label>
                                         <input type="text" value={phoneCode} onChange={e => setPhoneCode(e.target.value)} className="w-full p-4 bg-gray-900 border border-gray-700 rounded-xl text-white font-mono text-center tracking-[0.5em] text-2xl focus:ring-2 focus:ring-green-500 outline-none" placeholder="12345" />
                                     </div>
                                     <button onClick={submitCode} className="w-full bg-green-600 hover:bg-green-500 text-white p-4 rounded-xl font-bold transition-all shadow-lg shadow-green-900/40">
-                                        Validar Código
+                                        Validar
                                     </button>
                                 </div>
                             )}
 
                             {status === 'auth_password' && (
                                 <div className="space-y-5 animate-fade-in">
-                                    <p className="text-gray-300 text-sm text-center mb-4">Esta conta possui Verificação em Duas Etapas (2FA) ativa.</p>
+                                    <p className="text-gray-300 text-sm text-center mb-4">Conta possui Verificação (2FA).</p>
                                     <div>
                                         <label className="block text-xs font-bold uppercase tracking-wider text-gray-400 mb-2">Senha da Nuvem (2FA)</label>
                                         <input type="password" value={password} onChange={e => setPassword(e.target.value)} className="w-full p-4 bg-gray-900 border border-gray-700 rounded-xl text-white focus:ring-2 focus:ring-blue-500 outline-none" placeholder="Sua senha..." />
@@ -391,26 +396,24 @@
                 <div className="min-h-screen flex flex-col bg-gray-900 pb-24">
                     <Modal {...modalConfig} onClose={() => setModalConfig({ ...modalConfig, isOpen: false })} />
 
-                    {/* Header PWA */}
                     <header className="bg-gray-800/80 backdrop-blur-xl p-4 shadow-lg sticky top-0 z-30 border-b border-gray-700/50 flex justify-between items-center">
                         <div className="flex items-center gap-3">
                             <div className="w-10 h-10 bg-gradient-to-br from-blue-500 to-blue-700 rounded-xl flex items-center justify-center text-lg shadow-md shadow-blue-500/20">🚀</div>
                             <h1 className="text-xl font-extrabold text-white tracking-tight">TeleTube <span className="text-blue-500">Pro</span></h1>
                         </div>
                         <button onClick={handleLogout} className="text-xs font-bold text-red-400 hover:text-white px-4 py-2.5 bg-red-500/10 hover:bg-red-500 rounded-lg transition-all border border-red-500/20">
-                            Sair / Trocar
+                            Sair da Sessão
                         </button>
                     </header>
 
                     <main className="flex-1 p-4 w-full max-w-4xl mx-auto mt-4">
                         
-                        {/* Aba Acervo */}
                         {activeTab === 'acervo' && (
                             <div className="space-y-6 animate-fade-in">
                                 <div className="flex justify-between items-end mb-2">
                                     <div>
                                         <h2 className="text-3xl font-bold text-white tracking-tight">Seu Acervo</h2>
-                                        <p className="text-blue-400 text-sm mt-1">Lendo diretamente do Canal Seguro</p>
+                                        <p className="text-blue-400 text-sm mt-1">Lendo do Canal: {channelId}</p>
                                     </div>
                                     <button onClick={loadVideos} className="bg-gray-800 hover:bg-gray-700 active:bg-gray-600 px-5 py-2.5 rounded-xl text-white font-semibold flex items-center gap-2 transition-all border border-gray-700 shadow-md">
                                         <span>🔄</span> Recarregar
@@ -426,7 +429,7 @@
                                     <div className="text-center text-gray-500 py-24 bg-gray-800/30 rounded-3xl border-2 border-gray-700/50 border-dashed">
                                         <div className="text-6xl mb-6 opacity-40">🎬</div>
                                         <h3 className="text-xl font-bold text-gray-300 mb-2">Nenhum vídeo aqui</h3>
-                                        <p className="text-sm">Vá para a aba "Enviar" e faça o seu primeiro upload gigante.</p>
+                                        <p className="text-sm">Vá para a aba "Enviar" e faça o seu primeiro upload.</p>
                                     </div>
                                 ) : (
                                     <div className="grid gap-5 sm:grid-cols-2">
@@ -454,14 +457,13 @@
                             </div>
                         )}
 
-                        {/* Aba Enviar */}
                         {activeTab === 'enviar' && (
                             <div className="animate-fade-in">
                                 <div className="bg-gray-800/90 p-6 sm:p-10 rounded-[2rem] shadow-2xl border border-gray-700/50 relative overflow-hidden">
                                     <div className="absolute -top-20 -right-20 w-64 h-64 bg-blue-500/10 rounded-full blur-3xl pointer-events-none"></div>
                                     
                                     <h2 className="text-3xl font-bold text-white mb-2 tracking-tight">Novo Upload</h2>
-                                    <p className="text-blue-400 mb-10 font-medium text-sm">Arquivos suportados até 2GB por envio.</p>
+                                    <p className="text-blue-400 mb-10 font-medium text-sm">Arquivos enviados nativamente.</p>
                                     
                                     <div className="space-y-8 relative z-10">
                                         <div>
@@ -471,7 +473,7 @@
                                                 onChange={e => setVideoTitle(e.target.value)}
                                                 className="w-full p-4 bg-gray-900 border border-gray-600 rounded-2xl text-white focus:ring-2 focus:ring-blue-500 outline-none resize-none transition-all placeholder-gray-600" 
                                                 rows="3"
-                                                placeholder="Ex: Aula de Marketing Avançado - Módulo 1 #curso"
+                                                placeholder="Ex: Aula de Marketing - Módulo 1"
                                                 disabled={uploading}
                                             ></textarea>
                                         </div>
@@ -493,8 +495,8 @@
                                             <div className="bg-gray-900 p-6 rounded-2xl border border-blue-500/30 shadow-[0_0_15px_rgba(59,130,246,0.1)]">
                                                 <div className="flex justify-between items-end mb-4">
                                                     <div>
-                                                        <span className="block text-blue-400 font-bold text-sm mb-1">Empacotando e Enviando...</span>
-                                                        <span className="text-gray-400 text-xs">Mantenha a tela ligada durante o envio.</span>
+                                                        <span className="block text-blue-400 font-bold text-sm mb-1">{uploadPhase}</span>
+                                                        <span className="text-gray-400 text-xs">Mantenha a tela ligada.</span>
                                                     </div>
                                                     <span className="text-white font-black text-2xl">{uploadProgress}%</span>
                                                 </div>
@@ -516,7 +518,7 @@
                                                     Processando...
                                                 </>
                                             ) : (
-                                                <><span>☁️</span> Iniciar Upload Pesado</>
+                                                <><span>☁️</span> Iniciar Upload</>
                                             )}
                                         </button>
                                     </div>
@@ -525,7 +527,6 @@
                         )}
                     </main>
 
-                    {/* Menu Inferior Estilo App Nativo */}
                     <nav className="fixed bottom-0 w-full bg-gray-800/95 backdrop-blur-xl border-t border-gray-700/50 flex pb-safe z-30 shadow-[0_-10px_20px_rgba(0,0,0,0.4)]">
                         <button 
                             onClick={() => setActiveTab('acervo')} 
