@@ -38,13 +38,14 @@
             window.Buffer = bufferModule.Buffer;
             window.global = window; // Previne outro erro comum de módulos Node.js
 
-            // CORREÇÃO 2: Importamos TUDO diretamente do pacote raiz para que compartilhem o mesmo contexto na memória
-            const tg = await import('https://esm.sh/telegram@2.22.2?bundle');
+            // CORREÇÃO 2: Forçamos o importador a usar criptografia real (crypto-browserify)
+            // no lugar do simulador incompleto para conseguir criar as chaves de segurança.
+            const tg = await import('https://esm.sh/telegram@2.22.2?bundle&alias=crypto:crypto-browserify,stream:stream-browserify');
             
             window.TelegramLib = {
                 Api: tg.Api,
                 TelegramClient: tg.TelegramClient,
-                StringSession: tg.sessions.StringSession // Importando diretamente do namespace da raiz
+                StringSession: tg.sessions.StringSession 
             };
             window.dispatchEvent(new Event('telegramLoaded'));
         } catch (e) {
