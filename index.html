@@ -32,7 +32,13 @@
     <!-- Módulo nativo para carregar o GramJS com polyfills do Node.js via esm.sh -->
     <script type="module">
         try {
-            // CORREÇÃO: Importamos TUDO diretamente do pacote raiz para que compartilhem o mesmo contexto na memória
+            // CORREÇÃO 1: O navegador não possui as variáveis nativas de servidor.
+            // Precisamos injetar o 'Buffer' globalmente antes de carregar o Telegram.
+            const bufferModule = await import('https://esm.sh/buffer');
+            window.Buffer = bufferModule.Buffer;
+            window.global = window; // Previne outro erro comum de módulos Node.js
+
+            // CORREÇÃO 2: Importamos TUDO diretamente do pacote raiz para que compartilhem o mesmo contexto na memória
             const tg = await import('https://esm.sh/telegram@2.22.2?bundle');
             
             window.TelegramLib = {
