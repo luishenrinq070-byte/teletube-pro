@@ -15,7 +15,7 @@
     <script type="importmap">
         {
             "imports": {
-                "mtkruto": "https://cdn.jsdelivr.net/npm/@mtkruto/browser@0.142.0/esm/mod.js"
+                "mtkruto": "https://esm.sh/@mtkruto/browser"
             }
         }
     </script>
@@ -27,7 +27,7 @@
         console.log("Inicializando motor MTKruto (Web-First)...");
 
         try {
-            // MTKruto é feito para o navegador. Sem bugs de Buffer ou Crypto!
+            // Agora usando esm.sh, que resolve as dependências automaticamente!
             const { Client, StorageLocalStorage } = await import("mtkruto");
             
             window.TelegramClient = Client;
@@ -38,7 +38,7 @@
             
         } catch (error) {
             console.error("Falha Crítica no Motor:", error);
-            document.body.innerHTML += `<div style="padding: 20px; color: white; text-align: center; background: #dc2626; position: fixed; top: 0; width: 100%; z-index: 50; box-shadow: 0 10px 20px rgba(0,0,0,0.5);">Erro Fatal ao carregar motor de conexão. Verifique sua conexão ou tente limpar o cache. Detalhe: ${error.message}</div>`;
+            document.body.innerHTML += `<div style="padding: 20px; color: white; text-align: center; background: #dc2626; position: fixed; top: 0; width: 100%; z-index: 50; box-shadow: 0 10px 20px rgba(0,0,0,0.5);">Erro Fatal ao carregar motor de conexão. O CDN falhou. Tente atualizar a página. Detalhe: ${error.message}</div>`;
         }
     </script>
 
@@ -93,7 +93,6 @@
             const [uploading, setUploading] = useState(false);
             const [videoTitle, setVideoTitle] = useState('');
             
-            // Controle do Modal
             const [modalConfig, setModalConfig] = useState({ isOpen: false, title: '', message: '' });
             
             const fileInputRef = useRef(null);
@@ -110,7 +109,6 @@
                 }
             }, []);
 
-            // Disparador Universal de Notificações Visuais
             const showMessage = (title, message) => {
                 setModalConfig({ isOpen: true, title, message: String(message) });
             };
@@ -201,7 +199,7 @@
                     
                     // MTKruto usa iteradores assíncronos modernos
                     for await (const m of history) {
-                        // Verifica rigorosamente se há um vídeo (seja em .video ou .document)
+                        // Verifica rigorosamente se há um vídeo
                         const hasMedia = m.video || (m.document && m.document.mimeType && m.document.mimeType.includes('video'));
                         
                         if (hasMedia) {
