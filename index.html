@@ -13,8 +13,8 @@
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     
-    <!-- GramJS (Motor MTProto para Telegram) -->
-    <script src="https://cdn.jsdelivr.net/npm/telegram@2.22.2/browser/bundle.js"></script>
+    <!-- Evita o erro de favicon.ico (404) -->
+    <link rel="icon" href="data:,">
 
     <style>
         body { font-family: 'Inter', sans-serif; background-color: #0f172a; color: #f8fafc; overflow: hidden; }
@@ -29,12 +29,30 @@
 <body>
     <div id="root"></div>
 
+    <!-- Módulo nativo para carregar o GramJS com polyfills do Node.js via esm.sh -->
+    <script type="module">
+        try {
+            const tg = await import('https://esm.sh/telegram@2.22.2?bundle');
+            const sessions = await import('https://esm.sh/telegram@2.22.2/sessions?bundle');
+            
+            window.TelegramLib = {
+                Api: tg.Api,
+                TelegramClient: tg.TelegramClient,
+                StringSession: sessions.StringSession
+            };
+            window.dispatchEvent(new Event('telegramLoaded'));
+        } catch (e) {
+            console.error("Erro fatal ao importar pacote:", e);
+            alert("Erro ao carregar o motor do Telegram. O CDN pode estar bloqueado ou congestionado.");
+        }
+    </script>
+
     <script type="text/babel">
         const { useState, useEffect, useRef } = React;
-        const { Api, TelegramClient } = telegram;
-        const { StringSession } = telegram.sessions;
 
         function App() {
+            const [tgLib, setTgLib] = useState(window.TelegramLib || null);
+
             // Estados de Navegação e Autenticação
             const [activeTab, setActiveTab] = useState('gallery');
             const [sessionString, setSessionString] = useState(localStorage.getItem('tg_session') || '');
@@ -57,16 +75,25 @@
             };
 
             useEffect(() => {
-                // Tenta conectar automaticamente se já tiver uma sessão salva
-                if (sessionString && apiId && apiHash && !clientReady) {
-                    initClient(sessionString);
-                }
+                // Escuta o evento caso o pacote demore para baixar
+                const handleLoad = () => setTgLib(window.TelegramLib);
+                window.addEventListener('telegramLoaded', handleLoad);
+                
+                return () => window.removeEventListener('telegramLoaded', handleLoad);
             }, []);
 
+            useEffect(() => {
+                // Tenta conectar automaticamente se já tiver uma sessão salva e a lib estiver pronta
+                if (tgLib && sessionString && apiId && apiHash && !clientReady) {
+                    initClient(sessionString);
+                }
+            }, [tgLib, sessionString, apiId, apiHash, clientReady]);
+
             const initClient = async (savedSession = '') => {
+                if (!tgLib) return;
                 try {
-                    const stringSession = new StringSession(savedSession);
-                    clientRef.current = new TelegramClient(stringSession, Number(apiId), apiHash, {
+                    const stringSession = new tgLib.StringSession(savedSession);
+                    clientRef.current = new tgLib.TelegramClient(stringSession, Number(apiId), apiHash, {
                         connectionRetries: 5,
                     });
                     
@@ -182,7 +209,9 @@
                                 <input type="number" placeholder="App API ID" className="w-full bg-slate-800 border border-slate-700 rounded-lg p-4 mb-3 text-white" value={apiId} onChange={e => setApiId(e.target.value)} />
                                 <input type="text" placeholder="App API Hash" className="w-full bg-slate-800 border border-slate-700 rounded-lg p-4 mb-3 text-white" value={apiHash} onChange={e => setApiHash(e.target.value)} />
                                 <input type="text" placeholder="ID do Canal (ex: -100123...)" className="w-full bg-slate-800 border border-slate-700 rounded-lg p-4 mb-6 text-white" value={channelId} onChange={e => setChannelId(e.target.value)} />
-                                <button onClick={handleSaveCredentials} className="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-4 rounded-lg shadow-lg">Avançar</button>
+                                <button onClick={handleSaveCredentials} disabled={!tgLib} className="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-4 rounded-lg shadow-lg disabled:opacity-50">
+                                    {!tgLib ? 'Baixando Motor de Upload...' : 'Avançar'}
+                                </button>
                             </div>
                         )}
 
@@ -340,7 +369,7 @@
                         // Busca as últimas 50 mensagens do canal que contenham mídia do tipo Vídeo
                         const messages = await clientRef.current.getMessages(peer, {
                             limit: 50,
-                            filter: new Api.InputMessagesFilterVideo()
+                            filter: new tgLib.Api.InputMessagesFilterVideo()
                         });
 
                         const parsedVideos = messages.map(msg => ({
