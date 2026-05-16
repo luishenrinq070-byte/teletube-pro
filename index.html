@@ -193,12 +193,12 @@
                         peer = Number(channelId);
                     }
 
-                    // Puxando mensagens nativamente
-                    const history = clientRef.current.getHistory(peer, { limit: 50 });
+                    // Puxando mensagens nativamente (Aguardando a Promise terminar de carregar)
+                    const history = await clientRef.current.getHistory(peer, { limit: 50 });
                     const formattedVideos = [];
                     
-                    // MTKruto usa iteradores assíncronos modernos
-                    for await (const m of history) {
+                    // MTKruto retorna o Array pronto, iteramos ele de forma síncrona
+                    for (const m of history) {
                         // Verifica rigorosamente se há um vídeo
                         const hasMedia = m.video || (m.document && m.document.mimeType && m.document.mimeType.includes('video'));
                         
@@ -222,7 +222,11 @@
                     setVideos(formattedVideos);
                 } catch (e) {
                     console.error("Erro na leitura do Canal:", e);
-                    showMessage("Erro de Leitura", "Falha ao buscar vídeos. Verifique se o ID do canal está correto e se sua conta está inscrita nele.");
+                    if (e.message && e.message.includes('CHAT_ID_INVALID')) {
+                        showMessage("Canal Inválido ou Inacessível", "O Telegram recusou este ID de Canal. Verifique se ele começa com '-100' (ex: -10012345678) ou use o @nome_do_canal. Além disso, a conta logada precisa fazer parte do canal!");
+                    } else {
+                        showMessage("Erro de Leitura", "Falha ao buscar vídeos. Verifique a conexão. Detalhe: " + e.message);
+                    }
                 } finally {
                     setLoadingVideos(false);
                 }
@@ -275,7 +279,11 @@
                     clearInterval(progressInterval);
                     setUploading(false);
                     setUploadProgress(0);
-                    showMessage("Falha no Upload", "Houve uma quebra ao enviar o arquivo: " + e.message);
+                    if (e.message && e.message.includes('CHAT_ID_INVALID')) {
+                        showMessage("ID de Canal Inválido", "O Telegram não encontrou o canal para envio. Verifique se o ID possui o '-100' na frente.");
+                    } else {
+                        showMessage("Falha no Upload", "Houve uma quebra ao enviar o arquivo: " + e.message);
+                    }
                 }
             };
 
