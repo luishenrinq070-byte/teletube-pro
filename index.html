@@ -37,7 +37,7 @@
             
         } catch (error) {
             console.error("Falha Crítica no Motor:", error);
-            document.body.innerHTML += `<div style="padding: 20px; color: white; text-align: center; background: #dc2626; position: fixed; top: 0; width: 100%; z-index: 50; box-shadow: 0 10px 20px rgba(0,0,0,0.5);">Erro Fatal ao carregar motor de conexão. O CDN falhou. Tente atualizar a página. Detalhe: ${error.message}</div>`;
+            document.body.innerHTML += `<div style="padding: 20px; color: white; text-align: center; background: #dc2626; position: fixed; top: 0; width: 100%; z-index: 50; box-shadow: 0 10px 20px rgba(0,0,0,0.5);">Erro Fatal ao carregar motor de conexão. Verifique o console. Detalhe: ${error.message}</div>`;
         }
     </script>
 
@@ -83,10 +83,13 @@
             
             const [videos, setVideos] = useState([]);
             const [loadingVideos, setLoadingVideos] = useState(false);
+            
             const [uploadProgress, setUploadProgress] = useState(0);
             const [uploading, setUploading] = useState(false);
             const [videoTitle, setVideoTitle] = useState('');
-            const [uploadPhase, setUploadPhase] = useState(''); // Indica se está convertendo para binário
+            const [uploadPhase, setUploadPhase] = useState(''); 
+
+            const [downloadingId, setDownloadingId] = useState(null); // Estado para rastrear downloads
             
             const [modalConfig, setModalConfig] = useState({ isOpen: false, title: '', message: '' });
             
@@ -147,7 +150,7 @@
 
                 } catch (e) {
                     console.error("Falha Fatal na Conexão:", e);
-                    showMessage("Erro de Conexão", "Não foi possível conectar. Verifique sua internet, chaves de API, ou tente limpar os dados do navegador.");
+                    showMessage("Erro de Conexão", "Não foi possível conectar. Verifique sua internet ou tente limpar o cache.");
                     setStatus('initial');
                 }
             };
@@ -163,7 +166,7 @@
             };
 
             const submitPassword = () => {
-                if (!password) return showMessage("Aviso", "Digite sua senha de segurança.");
+                if (!password) return showMessage("Aviso", "Digite sua senha.");
                 if (passwordPromiseRef.current) passwordPromiseRef.current(password);
             };
 
@@ -185,11 +188,7 @@
                     }
 
                     const formattedVideos = [];
-                    
-                    // MTKruto retorna uma Promise com a lista de mensagens pronta, não um iterador.
                     const messagesObj = await clientRef.current.getHistory(peer, { limit: 50 });
-                    
-                    // Garante a extração correta da lista, dependendo se a API retorna direto o array ou um objeto
                     const messagesList = Array.isArray(messagesObj) ? messagesObj : (messagesObj?.messages || []);
                     
                     for (const m of messagesList) {
@@ -199,7 +198,6 @@
                             const title = m.caption || m.video?.fileName || m.document?.fileName || "Vídeo do Acervo";
                             const sizeBytes = m.video?.fileSize || m.document?.fileSize || 0;
                             
-                            // Limpa o -100 para gerar o link curto que abre o vídeo direto no App do Telegram
                             let cleanChannelId = channelId.toString();
                             if (cleanChannelId.startsWith('-100')) {
                                 cleanChannelId = cleanChannelId.replace('-100', '');
@@ -212,7 +210,8 @@
                                 title: title,
                                 size: sizeBytes ? (sizeBytes / (1024 * 1024)).toFixed(2) + ' MB' : 'MB Desconhecido',
                                 date: m.date ? new Date(m.date).toLocaleDateString('pt-BR') : new Date().toLocaleDateString('pt-BR'),
-                                deepLink: `https://t.me/c/${cleanChannelId}/${m.id}`
+                                deepLink: `https://t.me/c/${cleanChannelId}/${m.id}`,
+                                mediaRaw: m.video || m.document // Armazenando a mídia bruta para download
                             });
                         }
                     }
@@ -221,12 +220,55 @@
                 } catch (e) {
                     console.error("Erro na leitura do Canal:", e);
                     if (e.message && e.message.includes('CHAT_ID_INVALID')) {
-                        showMessage("ID de Canal Inválido", "O Telegram recusou. Certifique-se de usar o ID com o '-100' na frente (ex: -1003991395114) e que você esteja no canal.");
+                        showMessage("ID de Canal Inválido", "Certifique-se de usar o ID do canal com o '-100' na frente (ex: -1003991395114) e que você esteja no canal.");
                     } else {
                         showMessage("Erro de Leitura", "Falha ao buscar vídeos: " + e.message);
                     }
                 } finally {
                     setLoadingVideos(false);
+                }
+            };
+
+            const handleDownloadVideo = async (video) => {
+                if (downloadingId) {
+                    return showMessage("Aviso", "Aguarde o download atual terminar antes de iniciar outro.");
+                }
+                
+                if (!clientRef.current || !video.mediaRaw) {
+                    return showMessage("Erro", "Mídia indisponível para download.");
+                }
+
+                setDownloadingId(video.id);
+
+                try {
+                    // MTKruto: client.download() baixa os bytes brutos da mídia
+                    const buffer = await clientRef.current.download(video.mediaRaw);
+                    
+                    // Monta o arquivo virtual em memória
+                    const blob = new Blob([buffer], { type: video.mediaRaw.mimeType || 'video/mp4' });
+                    const url = URL.createObjectURL(blob);
+                    
+                    // Dispara o download nativo do navegador
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = video.title.endsWith('.mp4') ? video.title : `${video.title}.mp4`;
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    
+                    // Libera a memória RAM
+                    URL.revokeObjectURL(url);
+                    
+                    showMessage("Download Concluído! ✅", "O vídeo foi salvo no armazenamento do seu dispositivo.");
+                } catch (e) {
+                    console.error("Falha no download:", e);
+                    if (e.message && e.message.includes('memory') || String(e).includes('Allocation failed')) {
+                        showMessage("Erro de Memória (RAM)", "O vídeo é grande demais (ex: 2GB) para ser processado no navegador do seu celular. Por favor, use a opção 'Assistir via Telegram'.");
+                    } else {
+                        showMessage("Erro no Download", "Falha ao baixar o arquivo: " + e.message);
+                    }
+                } finally {
+                    setDownloadingId(null);
                 }
             };
 
@@ -242,38 +284,32 @@
 
                 try {
                     let peer = channelId;
-                    if (!isNaN(channelId) && channelId.trim() !== '') {
-                        peer = Number(channelId);
-                    }
+                    if (!isNaN(channelId) && channelId.trim() !== '') peer = Number(channelId);
 
                     const messageText = videoTitle || file.name;
 
-                    // 1. Transformar o HTML5 File num Uint8Array nativo (Resolve o erro "Unreachable")
                     setUploadPhase('Convertendo arquivo para Binário... Pode levar alguns segundos.');
                     const arrayBuffer = await file.arrayBuffer();
                     const uint8ArrayData = new Uint8Array(arrayBuffer);
                     
-                    // 2. Iniciar Simulação da Barra de Envio Visual
-                    setUploadPhase('Empacotando e Enviando para o Telegram...');
+                    setUploadPhase('Enviando para o Servidor do Telegram...');
                     let currentProgress = 0;
                     progressInterval = setInterval(() => {
                         currentProgress += (95 - currentProgress) * 0.05;
                         setUploadProgress(Math.round(currentProgress));
                     }, 500);
 
-                    // 3. Enviar Bytes Puros (Informando o nome do arquivo separadamente nos parâmetros)
                     await clientRef.current.sendDocument(peer, uint8ArrayData, {
                         caption: messageText,
                         fileName: file.name
                     });
 
-                    // Sucesso!
                     clearInterval(progressInterval);
                     setUploadProgress(100);
                     setUploadPhase('');
 
                     setTimeout(() => {
-                        showMessage("Upload Concluído! 🎉", "O vídeo foi enviado com sucesso para o seu canal do Telegram.");
+                        showMessage("Upload Concluído! 🎉", "O vídeo foi enviado com sucesso para o seu canal.");
                         setVideoTitle('');
                         if(fileInputRef.current) fileInputRef.current.value = '';
                         setActiveTab('acervo');
@@ -287,12 +323,7 @@
                     setUploading(false);
                     setUploadProgress(0);
                     setUploadPhase('');
-                    
-                    if (e.message && e.message.includes('CHAT_ID_INVALID')) {
-                        showMessage("ID de Canal Inválido", "O Telegram não encontrou o canal para envio. Verifique o '-100'.");
-                    } else {
-                        showMessage("Falha no Upload", "Houve uma quebra ao enviar o arquivo: " + e.message);
-                    }
+                    showMessage("Falha no Upload", "Houve uma quebra ao enviar o arquivo: " + e.message);
                 }
             };
 
@@ -329,8 +360,8 @@
                                         <input type="text" value={apiHash} onChange={e => setApiHash(e.target.value)} className="w-full p-4 bg-gray-900 border border-gray-700 rounded-xl text-white focus:ring-2 focus:ring-blue-500 outline-none transition-all" placeholder="Ex: a1b2c3d4..." />
                                     </div>
                                     <div>
-                                        <label className="block text-xs font-bold uppercase tracking-wider text-gray-400 mb-2">ID do Canal Alvo</label>
-                                        <input type="text" value={channelId} onChange={e => setChannelId(e.target.value)} className="w-full p-4 bg-gray-900 border border-gray-700 rounded-xl text-white focus:ring-2 focus:ring-blue-500 outline-none transition-all" placeholder="Ex: -10012345678" />
+                                        <label className="block text-xs font-bold uppercase tracking-wider text-gray-400 mb-2">ID do Canal (Começando com -100)</label>
+                                        <input type="text" value={channelId} onChange={e => setChannelId(e.target.value)} className="w-full p-4 bg-gray-900 border border-gray-700 rounded-xl text-white focus:ring-2 focus:ring-blue-500 outline-none transition-all" placeholder="Ex: -1003991395114" />
                                     </div>
                                     <button 
                                         onClick={handleConnect} 
@@ -344,8 +375,7 @@
                             {status === 'connecting' && (
                                 <div className="flex flex-col items-center py-12 animate-fade-in">
                                     <div className="w-14 h-14 border-4 border-blue-500 border-b-transparent rounded-full animate-spin mb-6 shadow-[0_0_20px_rgba(59,130,246,0.5)]"></div>
-                                    <p className="text-white font-bold text-lg">Estabelecendo WebSocket...</p>
-                                    <p className="text-gray-400 text-sm mt-2 text-center">Trocando chaves com o Telegram.</p>
+                                    <p className="text-white font-bold text-lg">Estabelecendo Conexão...</p>
                                 </div>
                             )}
 
@@ -375,7 +405,7 @@
                                     </button>
                                 </div>
                             )}
-
+                            
                             {status === 'auth_password' && (
                                 <div className="space-y-5 animate-fade-in">
                                     <p className="text-gray-300 text-sm text-center mb-4">Conta possui Verificação (2FA).</p>
@@ -403,7 +433,7 @@
                             <h1 className="text-xl font-extrabold text-white tracking-tight">TeleTube <span className="text-blue-500">Pro</span></h1>
                         </div>
                         <button onClick={handleLogout} className="text-xs font-bold text-red-400 hover:text-white px-4 py-2.5 bg-red-500/10 hover:bg-red-500 rounded-lg transition-all border border-red-500/20">
-                            Sair da Sessão
+                            Sair
                         </button>
                     </header>
 
@@ -414,7 +444,6 @@
                                 <div className="flex justify-between items-end mb-2">
                                     <div>
                                         <h2 className="text-3xl font-bold text-white tracking-tight">Seu Acervo</h2>
-                                        <p className="text-blue-400 text-sm mt-1">Lendo do Canal: {channelId}</p>
                                     </div>
                                     <button onClick={loadVideos} className="bg-gray-800 hover:bg-gray-700 active:bg-gray-600 px-5 py-2.5 rounded-xl text-white font-semibold flex items-center gap-2 transition-all border border-gray-700 shadow-md">
                                         <span>🔄</span> Recarregar
@@ -435,7 +464,7 @@
                                 ) : (
                                     <div className="grid gap-5 sm:grid-cols-2">
                                         {videos.map(video => (
-                                            <div key={video.id} className="bg-gray-800/80 p-5 rounded-2xl shadow-xl border border-gray-700/50 flex flex-col gap-5 hover:border-blue-500/50 transition-all hover:-translate-y-1 group">
+                                            <div key={video.id} className="bg-gray-800/80 p-5 rounded-2xl shadow-xl border border-gray-700/50 flex flex-col gap-4 hover:border-blue-500/50 transition-all hover:-translate-y-1 group">
                                                 <div className="flex items-start gap-4">
                                                     <div className="w-14 h-14 shrink-0 bg-gray-900 rounded-xl flex items-center justify-center text-2xl border border-gray-700 group-hover:border-blue-500/30 group-hover:bg-blue-500/10 transition-colors">
                                                         📹
@@ -448,9 +477,32 @@
                                                         </div>
                                                     </div>
                                                 </div>
-                                                <a href={video.deepLink} target="_blank" rel="noopener noreferrer" className="w-full flex items-center justify-center gap-2 bg-blue-600/10 hover:bg-blue-600 text-blue-400 hover:text-white border border-blue-500/20 px-4 py-3.5 rounded-xl font-bold transition-all shadow-md">
-                                                    <span>▶️</span> Assistir via Telegram (Stream)
-                                                </a>
+                                                
+                                                <div className="flex flex-col gap-2 mt-2">
+                                                    <a href={video.deepLink} target="_blank" rel="noopener noreferrer" className="w-full flex items-center justify-center gap-2 bg-blue-600/10 hover:bg-blue-600 text-blue-400 hover:text-white border border-blue-500/20 px-4 py-3 rounded-xl font-bold transition-all shadow-sm">
+                                                        <span>▶️</span> Assistir via App Telegram
+                                                    </a>
+                                                    
+                                                    <button 
+                                                        onClick={() => handleDownloadVideo(video)}
+                                                        disabled={downloadingId !== null}
+                                                        className={`w-full flex items-center justify-center gap-2 px-4 py-3 rounded-xl font-bold transition-all shadow-sm border ${
+                                                            downloadingId === video.id 
+                                                            ? 'bg-green-600/20 text-green-400 border-green-500/30 cursor-wait' 
+                                                            : downloadingId !== null 
+                                                                ? 'bg-gray-700 text-gray-500 border-gray-600 cursor-not-allowed'
+                                                                : 'bg-green-600/10 hover:bg-green-600 text-green-400 hover:text-white border-green-500/20'
+                                                        }`}>
+                                                        {downloadingId === video.id ? (
+                                                            <>
+                                                                <div className="w-4 h-4 border-2 border-green-400 border-t-transparent rounded-full animate-spin"></div>
+                                                                Baixando (Aguarde...)
+                                                            </>
+                                                        ) : (
+                                                            <><span>⬇️</span> Baixar Diretamente</>
+                                                        )}
+                                                    </button>
+                                                </div>
                                             </div>
                                         ))}
                                     </div>
@@ -464,9 +516,8 @@
                                     <div className="absolute -top-20 -right-20 w-64 h-64 bg-blue-500/10 rounded-full blur-3xl pointer-events-none"></div>
                                     
                                     <h2 className="text-3xl font-bold text-white mb-2 tracking-tight">Novo Upload</h2>
-                                    <p className="text-blue-400 mb-10 font-medium text-sm">Arquivos enviados nativamente.</p>
                                     
-                                    <div className="space-y-8 relative z-10">
+                                    <div className="space-y-8 relative z-10 mt-6">
                                         <div>
                                             <label className="block text-gray-300 mb-2 font-bold text-sm uppercase tracking-wide">Título / Legenda</label>
                                             <textarea 
@@ -474,13 +525,13 @@
                                                 onChange={e => setVideoTitle(e.target.value)}
                                                 className="w-full p-4 bg-gray-900 border border-gray-600 rounded-2xl text-white focus:ring-2 focus:ring-blue-500 outline-none resize-none transition-all placeholder-gray-600" 
                                                 rows="3"
-                                                placeholder="Ex: Aula de Marketing - Módulo 1"
+                                                placeholder="Ex: Aula 01"
                                                 disabled={uploading}
                                             ></textarea>
                                         </div>
 
                                         <div>
-                                            <label className="block text-gray-300 mb-2 font-bold text-sm uppercase tracking-wide">Selecionar Vídeo da Galeria</label>
+                                            <label className="block text-gray-300 mb-2 font-bold text-sm uppercase tracking-wide">Selecionar Vídeo</label>
                                             <div className="relative">
                                                 <input 
                                                     type="file" 
@@ -503,7 +554,6 @@
                                                 </div>
                                                 <div className="w-full bg-gray-800 rounded-full h-5 border border-gray-700 overflow-hidden relative">
                                                     <div className="bg-gradient-to-r from-blue-600 to-blue-400 h-full transition-all duration-300 relative" style={{ width: `${uploadProgress}%` }}>
-                                                        <div className="absolute inset-0 bg-[url('data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI4IiBoZWlnaHQ9IjgiPgo8cmVjdCB3aWR0aD0iOCIgaGVpZ2h0PSI4IiBmaWxsPSIjZmZmIiBmaWxsLW9wYWNpdHk9IjAuMSI+PC9yZWN0Pgo8L3N2Zz4=')] opacity-30"></div>
                                                     </div>
                                                 </div>
                                             </div>
