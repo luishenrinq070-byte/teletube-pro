@@ -32,13 +32,13 @@
     <!-- Módulo nativo para carregar o GramJS com polyfills do Node.js via esm.sh -->
     <script type="module">
         try {
+            // CORREÇÃO: Importamos TUDO diretamente do pacote raiz para que compartilhem o mesmo contexto na memória
             const tg = await import('https://esm.sh/telegram@2.22.2?bundle');
-            const sessions = await import('https://esm.sh/telegram@2.22.2/sessions?bundle');
             
             window.TelegramLib = {
                 Api: tg.Api,
                 TelegramClient: tg.TelegramClient,
-                StringSession: sessions.StringSession
+                StringSession: tg.sessions.StringSession // Importando diretamente do namespace da raiz
             };
             window.dispatchEvent(new Event('telegramLoaded'));
         } catch (e) {
@@ -142,6 +142,13 @@
                     setLoading(true);
                     try {
                         const client = await initClient('');
+                        
+                        // CORREÇÃO: Verifica se o cliente iniciou com sucesso antes de tentar enviar código
+                        if (!client) {
+                            setLoading(false);
+                            return; 
+                        }
+
                         const result = await client.sendCode(
                             { apiId: Number(apiId), apiHash },
                             phone
